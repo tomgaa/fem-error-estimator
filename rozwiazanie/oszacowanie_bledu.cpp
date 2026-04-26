@@ -1,0 +1,3 @@
+double oszacowanie_bledu() {
+    
+}
