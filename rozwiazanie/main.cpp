@@ -287,7 +287,38 @@ int main() {
         // r_K
         Eigen::Vector3d r_K;
         for (int p=0; p < ILOSC_FUNKCJI_TESTOWYCH; p++) {
-            Eigen::Vector3d B_K = A * d;
+            
+            double a = nodes[k];
+            double b = nodes[k+1];
+            double h = nodes[k+1] - nodes[k];
+            double duh = (d[k+1]-d[k])/h;
+
+            std::vector<std::function<double(double)>> N_i_B {N1_B, N2_B, N3_B};
+            std::vector<std::function<double(double)>> dN_i_B {dN1_B, dN2_B, dN3_B};
+
+
+            auto B_K_1 = [&](double s){
+                double a = nodes[k];
+                double x = a + h*s;
+
+                // 1 * d/dx = h * d/ds
+                // dx = (1/h) * ds
+
+                return duh*dN_i_B[p](x)*1/h;
+            };
+
+            auto B_K_2 = [&](double s){
+                double a = nodes[k];
+                double x = a+h*s;
+
+                return (d[k]*N1(x,a,b) + d[k+1]*N2(x,a,b))*N_i_B[p](x);
+            };
+
+            double term1 = h * calka(0,1,B_K_1);
+            double term2 = h * calka(0,1,B_K_2);
+
+            Eigen::Vector3d B_K;
+            B_K(p) = term1 + term2;
 
             Eigen::Vector3d L_K;
 
@@ -307,9 +338,9 @@ int main() {
             double L_v_2 = calka(0.0,1.0,L_int_2);
             double L_v_3 = calka(0.0,1.0,L_int_3);
 
-            L_K(0) -= L_v_1;
-            L_K(1) -= L_v_2;
-            L_K(2) -= L_v_3;
+            L_K(0) += L_v_1;
+            L_K(1) += L_v_2;
+            L_K(2) += L_v_3;
 
             double dN1 = -1;
             double dN2 = 1;
@@ -326,9 +357,9 @@ int main() {
             double delta_2 = t[k][0]*N2_B(0) + t[k][1]*N2_B(1) +  t_K(1, du_left, du_right, -1) + t_K(1, du_left, du_right, 1);
             double delta_3 = t[k][0]*N3_B(0) + t[k][1]*N3_B(1) +  t_K(1, du_left, du_right, -1) + t_K(1, du_left, du_right, 1);
 
-            B_K(0) -= delta_1;
-            B_K(1) -= delta_2;
-            B_K(2) -= delta_3;
+            B_K(0) += delta_1;
+            B_K(1) += delta_2;
+            B_K(2) += delta_3;
 
             r_K(0) = B_K(0) - L_K(0) - delta_1;
             r_K(1) = B_K(1) - L_K(1) - delta_2;
@@ -336,6 +367,25 @@ int main() {
         }
 
         b_K.push_back(A.colPivHouseholderQr().solve(r_K));
+    }
+
+    // obliczenie bledy i wyswietlanie go
+    for (int i=0; i < b_K.size(); i++) {
+        std::cout << "b_k_" << i << "wspolczynnik: \n";
+        for (int j=0; j < b_K[i].size(); j++){
+            std::cout << b_K[i][j] << "\n";
+        }
+
+        auto A_std = A_K(0.0,1.0, [](double){return 0.0;}, [](double){return 0.0;});
+        Eigen::Matrix3d A;
+        for (int k=0; k < 3; k++){
+            for (int l=0; l < 3; l++){
+                A(k,l) += A_std[k][l];
+            }
+        }
+
+        double eta2 = b_K[i].transpose()*A*b_K[i];
+        std::cout << "eta2: " << eta2 << "\n";
     }
 
     return 0;
