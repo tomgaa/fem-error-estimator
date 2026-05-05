@@ -4,6 +4,7 @@
 #include <stdexcept>
 #include <cmath>
 #include <iomanip>
+#include <algorithm>
 #include "../Eigen/Dense"
 
 // ==========================================================
@@ -127,7 +128,6 @@ double uhValue(
 
 // ==========================================================
 // Pochodna rozwiązania MES na elemencie
-// Nazwa zgodnie z prośbą: du, nie uPrime.
 // ==========================================================
 double duOnElement(
     const std::vector<double>& nodes,
@@ -313,7 +313,13 @@ void applyBC(
 // Szukamy phi_K w przestrzeni kwadratowej:
 // B_K(phi_K, v) = r_K(v)
 //
-// Tutaj B_K(phi,v) = int_K phi' v' dx + int_K q phi v dx
+// Tutaj B_K(phi,v) = int_K phi' v' dx + int_K q phi v dx.
+//
+// Uwaga dydaktyczna:
+// Dla q = 0 macierz A_K jest osobliwa, bo stała funkcja ma zerową
+// normę energetyczną na elemencie. To nie jest błąd programu,
+// tylko cecha problemu. Rozwiązanie phi_K jest wtedy wyznaczone
+// z dokładnością do stałej, a eta_K pozostaje dobrze określone.
 // ==========================================================
 Eigen::Matrix3d errorMatrix_AK(
     double a,
@@ -465,13 +471,12 @@ ElementBoundaryData computeElementBoundaryData(
 // Obliczanie lokalnego residuum r_K w przestrzeni kwadratowej
 //
 // Uwaga znakowa:
-// korzystamy z wersji zgodnej ze wzorem na theta:
+// korzystamy z wersji zgodnej z computeElementBoundaryData:
 // r_K(v) = B_K(u_h,v) - L_K(v)
 //          - theta1*v(0) - theta2*v(1)
 //          + tLeft*v(0) + tRight*v(1)
 //
-// Dzięki temu dla liniowych funkcji psi1, psi2 warunek
-// równowagi jest spełniony zgodnie z konstrukcją theta.
+// Dla v = psi1 oraz v = psi2 residuum powinno zanikać.
 // ==========================================================
 Eigen::Vector3d computeLocalResidual(
     const std::vector<double>& nodes,
@@ -568,6 +573,9 @@ Eigen::Vector3d computeLocalErrorFunction(
         boundaryDataOut
     );
 
+    // colPivHouseholderQr radzi sobie także z osobliwością przy q = 0.
+    // Otrzymana funkcja phi_K może różnić się o stałą, ale eta_K nie zależy
+    // od tej stałej, bo jest liczona w normie energetycznej.
     Eigen::Vector3d bK = AOut.colPivHouseholderQr().solve(rOut);
 
     return bK;
@@ -593,13 +601,217 @@ double computeEta2(
 }
 
 // ==========================================================
+// Norma energetyczna rozwiązania MES
+//
+// ||u_h||_E^2 = suma_K int_K (u_h')^2 + q u_h^2 dx
+//
+// Ta norma jest potrzebna do kryterium z note_mgr:
+// eta <= TOL * ||u_h||_E
+// ==========================================================
+double computeEnergyNormUh2(
+    const std::vector<double>& nodes,
+    const Eigen::VectorXd& d,
+    std::function<double(double)> q_fun
+) {
+    int nElem = static_cast<int>(nodes.size()) - 1;
+
+    double norm2 = 0.0;
+
+    for (int k = 0; k < nElem; k++) {
+        double a = nodes[k];
+        double b = nodes[k + 1];
+
+        double ui = d(k);
+        double uj = d(k + 1);
+        double duK = duOnElement(nodes, d, k);
+
+        norm2 += calka(a, b, [&](double x) {
+            double uh = uhValue(x, a, b, ui, uj);
+            return duK * duK + q_fun(x) * uh * uh;
+        });
+    }
+
+    if (norm2 < 0.0 && std::abs(norm2) < 1e-12) {
+        norm2 = 0.0;
+    }
+
+    return norm2;
+}
+
+// ==========================================================
+// Wyniki jednego kroku obliczeń: rozwiązanie + estymatory
+// ==========================================================
+struct FEMResult {
+    Eigen::VectorXd d;
+    std::vector<Eigen::Vector3d> bKList;
+    std::vector<double> eta2List;
+    double etaGlobal2;
+    double uhEnergyNorm2;
+};
+
+// ==========================================================
+// Jeden pełny krok:
+// 1. assembly,
+// 2. warunki brzegowe,
+// 3. rozwiązanie,
+// 4. estymator błędu.
+// ==========================================================
+FEMResult solveAndEstimate(
+    const std::vector<double>& nodes,
+    std::function<double(double)> p_fun,
+    std::function<double(double)> q_fun,
+    std::function<double(double)> f_fun,
+    BoundaryCondition left,
+    BoundaryCondition right,
+    bool printDetails
+) {
+    Eigen::MatrixXd K;
+    Eigen::VectorXd P;
+
+    assemble(nodes, p_fun, q_fun, f_fun, K, P);
+    applyBC(K, P, left, right);
+
+    Eigen::VectorXd d = K.colPivHouseholderQr().solve(P);
+
+    int nElem = static_cast<int>(nodes.size()) - 1;
+
+    std::vector<Eigen::Vector3d> bKList;
+    std::vector<double> eta2List;
+
+    double etaGlobal2 = 0.0;
+
+    if (printDetails) {
+        std::cout << "Rozwiazanie MES:\n";
+        for (int i = 0; i < d.size(); i++) {
+            std::cout << "u" << i << " = " << d(i) << "\n";
+        }
+
+        std::cout << "\n";
+        std::cout << "Obliczanie estymatora bledu:\n";
+    }
+
+    for (int k = 0; k < nElem; k++) {
+        ElementBoundaryData boundaryData;
+        Eigen::Matrix3d A;
+        Eigen::Vector3d rK;
+
+        Eigen::Vector3d bK = computeLocalErrorFunction(
+            nodes,
+            d,
+            k,
+            q_fun,
+            f_fun,
+            left,
+            right,
+            boundaryData,
+            A,
+            rK
+        );
+
+        double eta2 = computeEta2(bK, A);
+
+        bKList.push_back(bK);
+        eta2List.push_back(eta2);
+
+        etaGlobal2 += eta2;
+
+        if (printDetails) {
+            std::cout << "Element K" << k << " = ["
+                      << nodes[k] << ", " << nodes[k + 1] << "]\n";
+
+            std::cout << "  duK    = " << duOnElement(nodes, d, k) << "\n";
+            std::cout << "  tLeft  = " << boundaryData.tLeft << "\n";
+            std::cout << "  tRight = " << boundaryData.tRight << "\n";
+
+            std::cout << "  theta1 = " << boundaryData.theta1 << "\n";
+            std::cout << "  theta2 = " << boundaryData.theta2 << "\n";
+
+            std::cout << "  r_K:\n";
+            for (int i = 0; i < 3; i++) {
+                std::cout << "    r[" << i << "] = " << rK(i) << "\n";
+            }
+
+            std::cout << "  b_K, czyli wspolczynniki phi_K:\n";
+            for (int i = 0; i < 3; i++) {
+                std::cout << "    b[" << i << "] = " << bK(i) << "\n";
+            }
+
+            std::cout << "  eta_K^2 = " << eta2 << "\n";
+            std::cout << "  eta_K   = " << std::sqrt(eta2) << "\n";
+            std::cout << "\n";
+        }
+    }
+
+    double uhEnergyNorm2 = computeEnergyNormUh2(nodes, d, q_fun);
+
+    FEMResult result;
+    result.d = d;
+    result.bKList = bKList;
+    result.eta2List = eta2List;
+    result.etaGlobal2 = etaGlobal2;
+    result.uhEnergyNorm2 = uhEnergyNorm2;
+
+    return result;
+}
+
+// ==========================================================
+// Podział elementów wybranych przez kryterium:
+// eta_K > alpha * etaMax
+//
+// Element spełniający kryterium jest dzielony w połowie.
+// ==========================================================
+std::vector<double> refineMesh(
+    const std::vector<double>& nodes,
+    const std::vector<double>& eta2List,
+    double alpha
+) {
+    int nElem = static_cast<int>(nodes.size()) - 1;
+
+    double etaMax = 0.0;
+
+    for (int k = 0; k < nElem; k++) {
+        etaMax = std::max(etaMax, std::sqrt(eta2List[k]));
+    }
+
+    std::vector<double> newNodes;
+    newNodes.push_back(nodes[0]);
+
+    for (int k = 0; k < nElem; k++) {
+        double a = nodes[k];
+        double b = nodes[k + 1];
+
+        double etaK = std::sqrt(eta2List[k]);
+
+        if (etaK > alpha * etaMax) {
+            double mid = 0.5 * (a + b);
+            newNodes.push_back(mid);
+        }
+
+        newNodes.push_back(b);
+    }
+
+    return newNodes;
+}
+
+// ==========================================================
+// Wypisanie aktualnej siatki
+// ==========================================================
+void printNodes(const std::vector<double>& nodes) {
+    std::cout << "Siatka: ";
+    for (double x : nodes) {
+        std::cout << x << " ";
+    }
+    std::cout << "\n";
+}
+
+// ==========================================================
 // MAIN
 // ==========================================================
 int main() {
     std::cout << std::fixed << std::setprecision(10);
 
     // ------------------------------------------------------
-    // Siatka
+    // Siatka początkowa
     // ------------------------------------------------------
     std::vector<double> nodes = {0.0, 0.25, 0.5, 0.75, 0.85, 1.0};
 
@@ -637,88 +849,77 @@ int main() {
     BoundaryCondition right = {NEUMANN, -0.5};
 
     // ------------------------------------------------------
-    // Rozwiązanie standardowego problemu MES
+    // Parametry adaptacji siatki zgodne z note_mgr
+    //
+    // TOL   - tolerancja względna: eta <= TOL * ||u_h||_E
+    // alpha - dzielimy elementy, dla których eta_K > alpha * etaMax
     // ------------------------------------------------------
-    Eigen::MatrixXd K;
-    Eigen::VectorXd P;
-
-    assemble(nodes, p_fun, q_fun, f_fun, K, P);
-    applyBC(K, P, left, right);
-
-    Eigen::VectorXd d = K.colPivHouseholderQr().solve(P);
-
-    std::cout << "Rozwiazanie MES:\n";
-    for (int i = 0; i < d.size(); i++) {
-        std::cout << "u" << i << " = " << d(i) << "\n";
-    }
-
-    std::cout << "\n";
+    double TOL = 0.01;
+    double alpha = 0.3;
+    int maxAdaptSteps = 20;
 
     // ------------------------------------------------------
-    // Obliczanie estymatora błędu
+    // Procedura adaptacji siatki
     // ------------------------------------------------------
-    int nElem = static_cast<int>(nodes.size()) - 1;
+    FEMResult lastResult;
 
-    std::vector<Eigen::Vector3d> bKList;
-    std::vector<double> eta2List;
+    for (int step = 0; step < maxAdaptSteps; step++) {
+        std::cout << "==================================================\n";
+        std::cout << "Krok adaptacji: " << step << "\n";
+        printNodes(nodes);
 
-    double etaGlobal2 = 0.0;
+        bool printDetails = true;
 
-    for (int k = 0; k < nElem; k++) {
-        ElementBoundaryData boundaryData;
-        Eigen::Matrix3d A;
-        Eigen::Vector3d rK;
-
-        Eigen::Vector3d bK = computeLocalErrorFunction(
+        lastResult = solveAndEstimate(
             nodes,
-            d,
-            k,
+            p_fun,
             q_fun,
             f_fun,
             left,
             right,
-            boundaryData,
-            A,
-            rK
+            printDetails
         );
 
-        double eta2 = computeEta2(bK, A);
+        double etaGlobal = std::sqrt(lastResult.etaGlobal2);
+        double uhEnergyNorm = std::sqrt(lastResult.uhEnergyNorm2);
 
-        bKList.push_back(bK);
-        eta2List.push_back(eta2);
+        std::cout << "Globalny estymator bledu:\n";
+        std::cout << "  eta^2       = " << lastResult.etaGlobal2 << "\n";
+        std::cout << "  eta         = " << etaGlobal << "\n";
+        std::cout << "  ||u_h||_E^2 = " << lastResult.uhEnergyNorm2 << "\n";
+        std::cout << "  ||u_h||_E   = " << uhEnergyNorm << "\n";
+        std::cout << "  TOL*||u_h||_E = " << TOL * uhEnergyNorm << "\n";
 
-        etaGlobal2 += eta2;
-
-        std::cout << "Element K" << k << " = ["
-                  << nodes[k] << ", " << nodes[k + 1] << "]\n";
-
-        std::cout << "  duK    = " << duOnElement(nodes, d, k) << "\n";
-        std::cout << "  tLeft  = " << boundaryData.tLeft << "\n";
-        std::cout << "  tRight = " << boundaryData.tRight << "\n";
-
-        std::cout << "  theta1 = " << boundaryData.theta1 << "\n";
-        std::cout << "  theta2 = " << boundaryData.theta2 << "\n";
-
-        std::cout << "  r_K:\n";
-        for (int i = 0; i < 3; i++) {
-            std::cout << "    r[" << i << "] = " << rK(i) << "\n";
+        // Kryterium stopu z note_mgr:
+        // eta <= TOL * ||u_h||_E
+        if (etaGlobal <= TOL * uhEnergyNorm) {
+            std::cout << "\nSTOP: osiagnieto wymagana tolerancje bledu.\n";
+            break;
         }
 
-        std::cout << "  b_K, czyli wspolczynniki phi_K:\n";
-        for (int i = 0; i < 3; i++) {
-            std::cout << "    b[" << i << "] = " << bK(i) << "\n";
+        std::vector<double> newNodes = refineMesh(
+            nodes,
+            lastResult.eta2List,
+            alpha
+        );
+
+        if (newNodes.size() == nodes.size()) {
+            std::cout << "\nSTOP: siatka nie zostala zmieniona.\n";
+            break;
         }
 
-        std::cout << "  eta_K^2 = " << eta2 << "\n";
-        std::cout << "  eta_K   = " << std::sqrt(eta2) << "\n";
-        std::cout << "\n";
+        nodes = newNodes;
+
+        std::cout << "\nSiatka zostala zageszczona.\n\n";
+
+        if (step == maxAdaptSteps - 1) {
+            std::cout << "\nSTOP: osiagnieto maksymalna liczbe krokow adaptacji.\n";
+        }
     }
 
-    double etaGlobal = std::sqrt(etaGlobal2);
-
-    std::cout << "Globalny estymator bledu:\n";
-    std::cout << "  eta^2 = " << etaGlobal2 << "\n";
-    std::cout << "  eta   = " << etaGlobal << "\n";
+    std::cout << "\n==================================================\n";
+    std::cout << "Siatka koncowa:\n";
+    printNodes(nodes);
 
     return 0;
 }
