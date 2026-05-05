@@ -34,6 +34,95 @@ double N2(double x, double a, double b) {
     return (x - a) / (b - a);
 }
 
+double t_K(double a, double duLeft, double duRight, double n){
+    return 0.5*(a*duLeft+a*duRight) * n;
+}
+
+
+// funkcje bazowe dla funkcji bledu
+double N1_B(double s) {
+    return 2.0*(s-0.5)*(s-1);
+}
+
+double N2_B(double s) {
+    return 4.0*s*(1-s);
+}
+
+double N3_B(double s) {
+    return 2.0*s*(s-0.5);
+}
+
+// pochodne dla funkcji bazowych dla funkcji bledu
+double dN1_B(double s) { return 4*s-3;}
+double dN2_B(double s) { return 4-8*s;}
+double dN3_B(double s) { return 4*s-1;}
+
+double dN1B_N1B(double s) { return (4*s - 3)*(4*s - 3); }   // 16s² -24s +9
+double dN1B_N2B(double s) { return (4*s - 3)*(4 - 8*s); }   // -32s² +40s -12
+double dN1B_N3B(double s) { return (4*s - 3)*(4*s - 1); }   // 16s² -16s +3
+
+double dN2B_N1B(double s) { return dN1B_N2B(s); }
+double dN2B_N2B(double s) { return (4 - 8*s)*(4 - 8*s); }   // 64s² -64s +16
+double dN2B_N3B(double s) { return (4 - 8*s)*(4*s - 1); }   // -32s² +24s -4
+
+double dN3B_N1B(double s) { return dN1B_N3B(s); }
+double dN3B_N2B(double s) { return dN2B_N3B(s); }
+double dN3B_N3B(double s) { return (4*s - 1)*(4*s - 1); }   // 16s² -8s +1;
+
+std::vector<std::vector<double>> A_K(
+    double a, double b,
+    std::function<double(double)> p = [](double){return 0;},
+    std::function<double(double)> q = [](double){return 0;})
+{
+    double h = b - a;
+
+    std::vector<std::vector<double>> A(3, std::vector<double>(3, 0.0));
+
+    // (N_B)'^T * N_B, dla calki 0 do 1 uzywajc funkcji dN1B_N1B, dN1B_N2B ...
+    A[0][0] += (7.0/3.0)  / h;
+    A[0][1] += (-8.0/3.0) / h;
+    A[0][2] += (1.0/3.0)  / h;
+
+    A[1][0] += (-8.0/3.0) / h;
+    A[1][1] += (16.0/3.0) / h;
+    A[1][2] += (-8.0/3.0) / h;
+
+    A[2][0] += (1.0/3.0)  / h;
+    A[2][1] += (-8.0/3.0) / h;
+    A[2][2] += (7.0/3.0)  / h;
+
+    // funkcje lokalne
+    auto Ni = [&](int i, double x) {
+        switch (i) {
+            case 0:
+                return N1_B(x);
+                break;
+            case 1:
+                return N2_B(x);
+                break;
+            case 2:
+                return N3_B(x);
+                break;
+            default:
+                std::cout << "niepoprawny indeks funkcji lokalnej\n";
+        }
+    };
+
+    // część od q(x) * u
+    for (int i = 0; i < 3; i++) {
+        for  (int j = 0; j < 3; j++) {
+            auto integrand = [&](double x) {
+                return q(x) * Ni(i, x) * Ni(j, x);
+            };
+            A[i][j] += h * calka(0.0, 1.0, integrand); // h bierze sie z Jacobianu, bo integral(q(x)N_i*N_j dx = h integral_0_1(q(a + hs) N_i*N_j ds))
+            // x = a + hs, h = b - a
+            // dx = h*ds
+        }
+    }
+
+    return A;
+}
+
 // =======================
 // Macierz elementowa
 // =======================
@@ -389,93 +478,4 @@ int main() {
     }
 
     return 0;
-}
-
-double t_K(double a, double duLeft, double duRight, double n){
-    return 0.5*(a*duLeft+a*duRight) * n;
-}
-
-
-// funkcje bazowe dla funkcji bledu
-double N1_B(double s) {
-    return 2.0*(s-0.5)*(s-1);
-}
-
-double N2_B(double s) {
-    return 4.0*s*(1-s);
-}
-
-double N3_B(double s) {
-    return 2.0*s*(s-0.5);
-}
-
-// pochodne dla funkcji bazowych dla funkcji bledu
-double dN1_B(double s) { return 4*s-3;}
-double dN2_B(double s) { return 4-8*s;}
-double dN3_B(double s) { return 4*s-1;}
-
-double dN1B_N1B(double s) { return (4*s - 3)*(4*s - 3); }   // 16s² -24s +9
-double dN1B_N2B(double s) { return (4*s - 3)*(4 - 8*s); }   // -32s² +40s -12
-double dN1B_N3B(double s) { return (4*s - 3)*(4*s - 1); }   // 16s² -16s +3
-
-double dN2B_N1B(double s) { return dN1B_N2B(s); }
-double dN2B_N2B(double s) { return (4 - 8*s)*(4 - 8*s); }   // 64s² -64s +16
-double dN2B_N3B(double s) { return (4 - 8*s)*(4*s - 1); }   // -32s² +24s -4
-
-double dN3B_N1B(double s) { return dN1B_N3B(s); }
-double dN3B_N2B(double s) { return dN2B_N3B(s); }
-double dN3B_N3B(double s) { return (4*s - 1)*(4*s - 1); }   // 16s² -8s +1;
-
-std::vector<std::vector<double>> A_K(
-    double a, double b,
-    std::function<double(double)> p = [](double){return 0;},
-    std::function<double(double)> q = [](double){return 0;})
-{
-    double h = b - a;
-
-    std::vector<std::vector<double>> A(3, std::vector<double>(3, 0.0));
-
-    // (N_B)'^T * N_B, dla calki 0 do 1 uzywajc funkcji dN1B_N1B, dN1B_N2B ...
-    A[0][0] += (7.0/3.0)  / h;
-    A[0][1] += (-8.0/3.0) / h;
-    A[0][2] += (1.0/3.0)  / h;
-
-    A[1][0] += (-8.0/3.0) / h;
-    A[1][1] += (16.0/3.0) / h;
-    A[1][2] += (-8.0/3.0) / h;
-
-    A[2][0] += (1.0/3.0)  / h;
-    A[2][1] += (-8.0/3.0) / h;
-    A[2][2] += (7.0/3.0)  / h;
-
-    // funkcje lokalne
-    auto Ni = [&](int i, double x) {
-        switch (i) {
-            case 0:
-                return N1_B(x);
-                break;
-            case 1:
-                return N2_B(x);
-                break;
-            case 2:
-                return N3_B(x);
-                break;
-            default:
-                std::cout << "niepoprawny indeks funkcji lokalnej\n";
-        }
-    };
-
-    // część od q(x) * u
-    for (int i = 0; i < 3; i++) {
-        for  (int j = 0; j < 3; j++) {
-            auto integrand = [&](double x) {
-                return q(x) * Ni(i, x) * Ni(j, x);
-            };
-            A[i][j] += h * calka(0.0, 1.0, integrand); // h bierze sie z Jacobianu, bo integral(q(x)N_i*N_j dx = h integral_0_1(q(a + hs) N_i*N_j ds))
-            // x = a + hs, h = b - a
-            // dx = h*ds
-        }
-    }
-
-    return A;
 }
