@@ -111,8 +111,9 @@ std::vector<std::vector<double>> A_K(
     // część od q(x) * u
     for (int i = 0; i < 3; i++) {
         for  (int j = 0; j < 3; j++) {
-            auto integrand = [&](double x) {
-                return q(x) * Ni(i, x) * Ni(j, x);
+            auto integrand = [&](double s) {
+                double x = a+h*s;
+                return q(x) * Ni(i, s) * Ni(j, s);
             };
             A[i][j] += h * calka(0.0, 1.0, integrand); // h bierze sie z Jacobianu, bo integral(q(x)N_i*N_j dx = h integral_0_1(q(a + hs) N_i*N_j ds))
             // x = a + hs, h = b - a
