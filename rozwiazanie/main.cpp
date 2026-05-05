@@ -437,9 +437,9 @@ int main() {
             double du_left = d(k)*dN1 + d(k+1)*dN2;
             double du_right = 0;
             if (k == (int)nodes.size() - 1) {
-                double du_right = d[k+1]*dN1 + d[k+1]*dN2;
+                du_right = d[k+1]*dN1 + d[k+1]*dN2;
             } else {
-                double du_right = d[k+1]*dN1 + d[k+2]*dN2;
+                du_right = d[k+1]*dN1 + d[k+2]*dN2;
             }
 
             double delta_1 = t[k][0]*N1_B(0) + t[k][1]*N1_B(1) +  t_K(1, du_left, du_right, -1) + t_K(1, du_left, du_right, 1);
