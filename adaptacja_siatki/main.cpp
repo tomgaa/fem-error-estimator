@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <algorithm>
 #include "../Eigen/Dense"
+#include "fem_visualizer.h"
 
 // ==========================================================
 // Typy warunków brzegowych
@@ -663,7 +664,8 @@ FEMResult solveAndEstimate(
     std::function<double(double)> f_fun,
     BoundaryCondition left,
     BoundaryCondition right,
-    bool printDetails
+    bool printSolutionDetails,
+    bool printErrorDetails
 ) {
     Eigen::MatrixXd K;
     Eigen::VectorXd P;
@@ -680,7 +682,7 @@ FEMResult solveAndEstimate(
 
     double etaGlobal2 = 0.0;
 
-    if (printDetails) {
+    if (printSolutionDetails) {
         std::cout << "Rozwiazanie MES:\n";
         for (int i = 0; i < d.size(); i++) {
             std::cout << "u" << i << " = " << d(i) << "\n";
@@ -715,7 +717,7 @@ FEMResult solveAndEstimate(
 
         etaGlobal2 += eta2;
 
-        if (printDetails) {
+        if (printErrorDetails) {
             std::cout << "Element K" << k << " = ["
                       << nodes[k] << ", " << nodes[k + 1] << "]\n";
 
@@ -811,17 +813,33 @@ int main() {
     std::cout << std::fixed << std::setprecision(10);
 
     // ------------------------------------------------------
-    // Siatka początkowa
+    // Siatka poczatkowa
     // ------------------------------------------------------
-    std::vector<double> nodes = {0.0, 0.25, 0.5, 0.75, 0.85, 1.0};
 
     // ------------------------------------------------------
-    // Równanie
+    // PRZYKLAD: warstwa wewnetrzna (interior layer)
     //
-    // Solver MES obsługuje:
+    // Rozwiazanie analityczne:
+    //   u(x) = tanh(k * (x - 0.5)),  k = 10
+    //
+    // Rownanie: -u'' + u = f(x)
+    //   f(x) = tanh(k*(x-0.5)) * (1 + 2k^2 * sech^2(k*(x-0.5)))
+    //
+    // Steep gradient przy x = 0.5 — siatka powinna sie tam
+    // dramatycznie zageszczac w kolejnych krokach adaptacji.
+    // ------------------------------------------------------
+    std::vector<double> nodes = {0.0, 0.25, 0.5, 0.75, 1.0};
+
+    const double k  = 10.0;
+    const double x0 = 0.5;
+
+    // ------------------------------------------------------
+    // Rownanie
+    //
+    // Solver MES obsluguje:
     // -u'' + p u' + q u = f
     //
-    // Estymator błędu poniżej jest zgodny dla:
+    // Estymator bledu ponizej jest zgodny dla:
     // -u'' + q u = f
     //
     // Dlatego na tym etapie trzymaj p_fun = 0.
@@ -830,45 +848,54 @@ int main() {
         return 0.0;
     };
 
+    // q > 0 sprawia ze macierz A_K lokalnego problemu bledu
+    // jest dodatnio okreslona (bez osobliwosci).
     auto q_fun = [](double x) {
-        return 0.0;
+        return 1.0;
     };
 
-    auto f_fun = [](double x) {
-        return 6.0 * x * x;
+    // Rownanie: -u'' + u = f
+    // u(x)   = tanh(k*(x-x0))
+    // u''(x) = -2k^2 * tanh(k*(x-x0)) * sech^2(k*(x-x0))
+    // f(x)   = -u'' + u = tanh(k*(x-x0)) * (1 + 2k^2 * sech^2(k*(x-x0)))
+    auto f_fun = [k, x0](double x) {
+        double t     = std::tanh(k * (x - x0));
+        double sech2 = 1.0 / (std::cosh(k * (x - x0)) * std::cosh(k * (x - x0)));
+        return t * (1.0 + 2.0 * k * k * sech2);
     };
 
     // ------------------------------------------------------
     // Warunki brzegowe
     //
-    // Przykład:
-    // u(0) = 1
-    // u'(1) = -0.5
+    // Dirichlet z wartosciami analitycznymi:
+    // u(0) = tanh(-k*x0),  u(1) = tanh(k*(1-x0))
     // ------------------------------------------------------
-    BoundaryCondition left = {DIRICHLET, 1.0};
-    BoundaryCondition right = {NEUMANN, -0.5};
+    BoundaryCondition left  = {DIRICHLET, std::tanh(-k * x0)};
+    BoundaryCondition right = {DIRICHLET, std::tanh( k * (1.0 - x0))};
 
     // ------------------------------------------------------
     // Parametry adaptacji siatki zgodne z note_mgr
     //
-    // TOL   - tolerancja względna: eta <= TOL * ||u_h||_E
-    // alpha - dzielimy elementy, dla których eta_K > alpha * etaMax
+    // TOL   - tolerancja wzgledna: eta <= TOL * ||u_h||_E
+    // alpha - dzielimy elementy, dla ktorych eta_K > alpha * etaMax
     // ------------------------------------------------------
     double TOL = 0.01;
-    double alpha = 0.3;
+    double alpha = 0.5;
     int maxAdaptSteps = 20;
 
     // ------------------------------------------------------
     // Procedura adaptacji siatki
     // ------------------------------------------------------
     FEMResult lastResult;
+    FEMVisualizer viz;
 
     for (int step = 0; step < maxAdaptSteps; step++) {
         std::cout << "==================================================\n";
         std::cout << "Krok adaptacji: " << step << "\n";
         printNodes(nodes);
 
-        bool printDetails = true;
+        bool printSolutionDetails = true;
+        bool printErrorDetails = false;
 
         lastResult = solveAndEstimate(
             nodes,
@@ -877,7 +904,8 @@ int main() {
             f_fun,
             left,
             right,
-            printDetails
+            printSolutionDetails,
+            printErrorDetails
         );
 
         double etaGlobal = std::sqrt(lastResult.etaGlobal2);
@@ -889,6 +917,9 @@ int main() {
         std::cout << "  ||u_h||_E^2 = " << lastResult.uhEnergyNorm2 << "\n";
         std::cout << "  ||u_h||_E   = " << uhEnergyNorm << "\n";
         std::cout << "  TOL*||u_h||_E = " << TOL * uhEnergyNorm << "\n";
+
+        viz.plotStep(step, nodes, lastResult.d, lastResult.eta2List,
+                     etaGlobal, uhEnergyNorm, TOL, alpha);
 
         // Kryterium stopu z note_mgr:
         // eta <= TOL * ||u_h||_E
