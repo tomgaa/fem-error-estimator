@@ -353,9 +353,6 @@ int main() {
 
         t.push_back(theta);
     }
-    
-
-    std::cout << "ok0\n";
 
     // szukanie funkcji błędu
     // B(sigma_K, v) = r_K(v), rozszerzona przestrzen (p + 1) -> p = 2, trzy funkcje
@@ -460,8 +457,6 @@ int main() {
 
         b_K.push_back(A.colPivHouseholderQr().solve(r_K));
     }
-
-    std::cout << "ok\n";
 
     // obliczenie bledy i wyswietlanie go
     for (int i=0; i < b_K.size(); i++) {
