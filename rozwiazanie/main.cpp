@@ -303,7 +303,7 @@ int main() {
     }
 
     // szukanie błędu
-    std::vector<std::vector<double>> t(int(nodes.size()), std::vector<double>(0));
+    std::vector<std::vector<double>> t(0, std::vector<double>(0));
 
     // u(0) = 1
     // u(L) = -0.5
@@ -323,7 +323,7 @@ int main() {
         // czesc t_K
         double du_left = d[i]*dN1 + d[i+1]*dN2;
         double du_right = 0;
-        if (i == (int)nodes.size() - 1) {
+        if (i == (int)nodes.size() - 2) {
             double du_right = d[i+1]*dN1 + d[i+1]*dN2;
         } else {
             double du_right = d[i+1]*dN1 + d[i+2]*dN2;
@@ -353,13 +353,16 @@ int main() {
 
         t.push_back(theta);
     }
+    
+
+    std::cout << "ok0\n";
 
     // szukanie funkcji błędu
     // B(sigma_K, v) = r_K(v), rozszerzona przestrzen (p + 1) -> p = 2, trzy funkcje
 
     // A_K * b_K = r_K
     std::vector<Eigen::VectorXd> b_K;
-    for (int k=0; k < nodes.size(); k++)
+    for (int k=0; k < nodes.size()-1; k++)
     {
         Eigen::MatrixXd A = Eigen::MatrixXd::Zero(3, 3);
 
@@ -436,7 +439,7 @@ int main() {
 
             double du_left = d(k)*dN1 + d(k+1)*dN2;
             double du_right = 0;
-            if (k == (int)nodes.size() - 1) {
+            if (k == (int)nodes.size() - 2) {
                 du_right = d[k+1]*dN1 + d[k+1]*dN2;
             } else {
                 du_right = d[k+1]*dN1 + d[k+2]*dN2;
@@ -457,6 +460,8 @@ int main() {
 
         b_K.push_back(A.colPivHouseholderQr().solve(r_K));
     }
+
+    std::cout << "ok\n";
 
     // obliczenie bledy i wyswietlanie go
     for (int i=0; i < b_K.size(); i++) {
