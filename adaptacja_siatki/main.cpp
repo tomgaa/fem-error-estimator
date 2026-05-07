@@ -405,7 +405,7 @@ std::pair<double, double> computeTForElement(
 }
 
 // ==========================================================
-// Obliczanie theta1, theta2 wg idei z note_mgr
+// Obliczanie theta1, theta2
 //
 // theta1 = B_K(u_h, psi1) - L_K(psi1) + tLeft
 // theta2 = B_K(u_h, psi2) - L_K(psi2) + tRight
@@ -606,7 +606,7 @@ double computeEta2(
 //
 // ||u_h||_E^2 = suma_K int_K (u_h')^2 + q u_h^2 dx
 //
-// Ta norma jest potrzebna do kryterium z note_mgr:
+// Ta norma jest potrzebna do kryterium:
 // eta <= TOL * ||u_h||_E
 // ==========================================================
 double computeEnergyNormUh2(
@@ -874,7 +874,7 @@ int main() {
     BoundaryCondition right = {DIRICHLET, std::tanh( k * (1.0 - x0))};
 
     // ------------------------------------------------------
-    // Parametry adaptacji siatki zgodne z note_mgr
+    // Parametry adaptacji siatki
     //
     // TOL   - tolerancja wzgledna: eta <= TOL * ||u_h||_E
     // alpha - dzielimy elementy, dla ktorych eta_K > alpha * etaMax
@@ -921,7 +921,7 @@ int main() {
         viz.plotStep(step, nodes, lastResult.d, lastResult.eta2List,
                      etaGlobal, uhEnergyNorm, TOL, alpha);
 
-        // Kryterium stopu z note_mgr:
+        // Kryterium stopu:
         // eta <= TOL * ||u_h||_E
         if (etaGlobal <= TOL * uhEnergyNorm) {
             std::cout << "\nSTOP: osiagnieto wymagana tolerancje bledu.\n";
