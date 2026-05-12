@@ -38,8 +38,8 @@ using Function = std::function<double(double)>;
 // Parametry numeryczne
 // ==========================================================
 
-const double DERIV_STEP = 1e-6;
-const double INTEGRATION_STEP = 1e-4;
+const double DERIV_STEP = 1e-4;
+const double INTEGRATION_STEP = 1e-3;
 
 // ==========================================================
 // Pochodna numeryczna i całkowanie prostokątami
@@ -1221,24 +1221,36 @@ int main() {
             return 1.0;
         };
 
-        Function p_fun = [](double /*x*/) {
-            return 0.0;
+        const double k  = 10.0;
+        const double x0 = 0.5;
+
+        // q > 0 sprawia ze macierz A_K lokalnego problemu bledu
+        // jest dodatnio okreslona (bez osobliwosci).
+        auto q_fun = [](double x) {
+            return 1.0;
         };
 
-        Function q_fun = [](double /*x*/) {
-            return 0.0;
+        auto p_fun = [](double x) {
+        return 0.0;
+        };
+        
+        // Rownanie: -u'' + u = f
+        // u(x)   = tanh(k*(x-x0))
+        // u''(x) = -2k^2 * tanh(k*(x-x0)) * sech^2(k*(x-x0))
+        // f(x)   = -u'' + u = tanh(k*(x-x0)) * (1 + 2k^2 * sech^2(k*(x-x0)))
+        auto f_fun = [k, x0](double x) {
+            double t     = std::tanh(k * (x - x0));
+            double sech2 = 1.0 / (std::cosh(k * (x - x0)) * std::cosh(k * (x - x0)));
+            return t * (1.0 + 2.0 * k * k * sech2);
         };
 
-        Function f_fun = [](double x) {
-            return 6.0 * x * x;
+        Function u_exact = [&](double x) {
+            return std::tanh(k*(x-x0));
         };
 
-        Function u_exact = [](double x) {
-            return -0.5 * std::pow(x, 4.0) + 1.5 * x + 1.0;
-        };
-
-        const double leftDirichletValue = 1.0;
-        const double rightNeumannFlux = -0.5;
+        const double leftDirichletValue = u_exact(0.0);
+        const double rightNeumannFlux =
+            k / (std::cosh(k * (1.0 - x0)) * std::cosh(k * (1.0 - x0)));
 
         std::vector<double> meshNodes = {
             0.0,
@@ -1246,7 +1258,7 @@ int main() {
             1.0
         };
 
-        const int maxSteps = 4;
+        const int maxSteps = 20;
         const double TOL = 0.01;
         const double alpha = 0.3;
 
