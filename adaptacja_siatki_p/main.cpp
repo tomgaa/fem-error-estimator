@@ -18,6 +18,19 @@
 //
 // Ta wersja NIE używa kwadratury Gaussa.
 // Pochodne są liczone numerycznie, tak jak w pierwotnym main.cpp.
+//
+// Warunki brzegowe są elastyczne:
+//
+//     BoundaryCondition left  = {DIRICHLET, value};
+//     BoundaryCondition right = {DIRICHLET, value};
+//
+// albo:
+//
+//     BoundaryCondition right = {NEUMANN, value};
+//
+// Uwaga:
+// Dla NEUMANN value oznacza naturalny strumień a(x)u'(x)
+// na brzegu. Dla a(x)=1 jest to po prostu u'(x).
 // ==========================================================
 
 #include <iostream>
@@ -40,6 +53,20 @@ using Function = std::function<double(double)>;
 
 const double DERIV_STEP = 1e-4;
 const double INTEGRATION_STEP = 1e-3;
+
+// ==========================================================
+// Warunki brzegowe
+// ==========================================================
+
+enum BoundaryType {
+    DIRICHLET,
+    NEUMANN
+};
+
+struct BoundaryCondition {
+    BoundaryType type;
+    double value;
+};
 
 // ==========================================================
 // Pochodna numeryczna i całkowanie prostokątami
@@ -101,16 +128,14 @@ int globalDof(int elem, int local, int p_deg) {
 // Węzły referencyjne i funkcje Lagrange'a na [0,1]
 // ==========================================================
 
-std::vector<double> referenceNodes(int degree) {
+double referenceNode(int i, int degree) {
     validateDegree(degree);
 
-    std::vector<double> nodes(degree + 1);
-
-    for (int i = 0; i <= degree; ++i) {
-        nodes[i] = static_cast<double>(i) / static_cast<double>(degree);
+    if (i < 0 || i > degree) {
+        throw std::runtime_error("referenceNode: zły lokalny indeks.");
     }
 
-    return nodes;
+    return static_cast<double>(i) / static_cast<double>(degree);
 }
 
 double shapeValue(int i, int degree, double s) {
@@ -120,14 +145,14 @@ double shapeValue(int i, int degree, double s) {
         throw std::runtime_error("shapeValue: zły lokalny indeks funkcji kształtu.");
     }
 
-    auto nodes = referenceNodes(degree);
-
+    double si = referenceNode(i, degree);
     double value = 1.0;
 
     for (int j = 0; j <= degree; ++j) {
         if (j == i) continue;
 
-        value *= (s - nodes[j]) / (nodes[i] - nodes[j]);
+        double sj = referenceNode(j, degree);
+        value *= (s - sj) / (si - sj);
     }
 
     return value;
@@ -139,11 +164,20 @@ double shapeValue(int i, int degree, double s) {
 //     dN/dx = (dN/ds) / h
 //
 double shapeDerivNumerical(int i, int degree, double s) {
-    Function Ni = [=](double ss) {
-        return shapeValue(i, degree, ss);
-    };
+    double h = DERIV_STEP;
 
-    return pochodna(s, Ni, DERIV_STEP);
+    if (s - h < 0.0) {
+        return (shapeValue(i, degree, s + h)
+              - shapeValue(i, degree, s)) / h;
+    }
+
+    if (s + h > 1.0) {
+        return (shapeValue(i, degree, s)
+              - shapeValue(i, degree, s - h)) / h;
+    }
+
+    return (shapeValue(i, degree, s + h)
+          - shapeValue(i, degree, s - h)) / (2.0 * h);
 }
 
 // ==========================================================
@@ -355,7 +389,7 @@ void assembleSystem(
 }
 
 // ==========================================================
-// Warunki brzegowe
+// Warunki brzegowe: część naturalna i podstawowa
 // ==========================================================
 
 void applyDirichlet(
@@ -375,12 +409,51 @@ void applyDirichlet(
     F(dof) = value;
 }
 
-void addRightNeumann(
+void applyNaturalBoundaryConditions(
     Eigen::VectorXd& F,
-    double rightFlux
+    const BoundaryCondition& left,
+    const BoundaryCondition& right
 ) {
     int rightDof = static_cast<int>(F.size()) - 1;
-    F(rightDof) += rightFlux;
+
+    // Dla równania:
+    //
+    //     -(a u')' + p u' + q u = f
+    //
+    // słaba forma ma po prawej stronie wkład:
+    //
+    //     + (a u')(1) v(1) - (a u')(0) v(0)
+    //
+    // Dlatego:
+    //   lewy Neumann  -> F(0)        -= value
+    //   prawy Neumann -> F(rightDof) += value
+    //
+    // value oznacza naturalny strumień a(x)u'(x).
+
+    if (left.type == NEUMANN) {
+        F(0) -= left.value;
+    }
+
+    if (right.type == NEUMANN) {
+        F(rightDof) += right.value;
+    }
+}
+
+void applyEssentialBoundaryConditions(
+    Eigen::MatrixXd& K,
+    Eigen::VectorXd& F,
+    const BoundaryCondition& left,
+    const BoundaryCondition& right
+) {
+    int rightDof = static_cast<int>(F.size()) - 1;
+
+    if (left.type == DIRICHLET) {
+        applyDirichlet(K, F, 0, left.value);
+    }
+
+    if (right.type == DIRICHLET) {
+        applyDirichlet(K, F, rightDof, right.value);
+    }
 }
 
 // ==========================================================
@@ -394,8 +467,8 @@ Eigen::VectorXd solveFEM(
     const Function& p_fun,
     const Function& q_fun,
     const Function& f_fun,
-    double leftDirichletValue,
-    double rightNeumannFlux
+    const BoundaryCondition& left,
+    const BoundaryCondition& right
 ) {
     Eigen::MatrixXd K;
     Eigen::VectorXd F;
@@ -411,8 +484,8 @@ Eigen::VectorXd solveFEM(
         F
     );
 
-    addRightNeumann(F, rightNeumannFlux);
-    applyDirichlet(K, F, 0, leftDirichletValue);
+    applyNaturalBoundaryConditions(F, left, right);
+    applyEssentialBoundaryConditions(K, F, left, right);
 
     Eigen::VectorXd d = K.partialPivLu().solve(F);
 
@@ -527,8 +600,8 @@ double averagedFluxOnElementBoundary(
     int p_deg,
     int side,
     const Function& a_fun,
-    double rightNeumannFlux,
-    bool useRightNeumannFlux
+    const BoundaryCondition& left,
+    const BoundaryCondition& right
 ) {
     int nElem = static_cast<int>(meshNodes.size()) - 1;
 
@@ -538,6 +611,13 @@ double averagedFluxOnElementBoundary(
 
     if (side == -1) {
         double x = a;
+
+        // Lewy brzeg globalny.
+        if (elem == 0 && left.type == NEUMANN) {
+            // Normalna zewnętrzna po lewej stronie to n = -1.
+            // left.value oznacza naturalny strumień a u'.
+            return -left.value;
+        }
 
         double duK = duhDxOnElement(
             elem,
@@ -567,11 +647,20 @@ double averagedFluxOnElementBoundary(
             return 0.5 * (fluxK + fluxL) * (-1.0);
         }
 
+        // Lewy Dirichlet: strumień nie jest zadany,
+        // więc bierzemy jednostronny strumień z elementu.
         return fluxK * (-1.0);
     }
 
     if (side == +1) {
         double x = b;
+
+        // Prawy brzeg globalny.
+        if (elem == nElem - 1 && right.type == NEUMANN) {
+            // Normalna zewnętrzna po prawej stronie to n = +1.
+            // right.value oznacza naturalny strumień a u'.
+            return right.value;
+        }
 
         double duK = duhDxOnElement(
             elem,
@@ -601,10 +690,8 @@ double averagedFluxOnElementBoundary(
             return 0.5 * (fluxK + fluxR) * (+1.0);
         }
 
-        if (useRightNeumannFlux) {
-            return rightNeumannFlux;
-        }
-
+        // Prawy Dirichlet: strumień nie jest zadany,
+        // więc bierzemy jednostronny strumień z elementu.
         return fluxK * (+1.0);
     }
 
@@ -622,7 +709,8 @@ ElementBoundaryData computeElementBoundaryData(
     const Function& p_fun,
     const Function& q_fun,
     const Function& f_fun,
-    double rightNeumannFlux
+    const BoundaryCondition& left,
+    const BoundaryCondition& right
 ) {
     ElementBoundaryData data;
 
@@ -633,8 +721,8 @@ ElementBoundaryData computeElementBoundaryData(
         p_deg,
         -1,
         a_fun,
-        rightNeumannFlux,
-        true
+        left,
+        right
     );
 
     data.tRight = averagedFluxOnElementBoundary(
@@ -644,8 +732,8 @@ ElementBoundaryData computeElementBoundaryData(
         p_deg,
         +1,
         a_fun,
-        rightNeumannFlux,
-        true
+        left,
+        right
     );
 
     int leftLocal = 0;
@@ -957,8 +1045,8 @@ FEMResult solveAndEstimate(
     const Function& p_fun,
     const Function& q_fun,
     const Function& f_fun,
-    double leftDirichletValue,
-    double rightNeumannFlux
+    const BoundaryCondition& left,
+    const BoundaryCondition& right
 ) {
     validateDegree(p_deg);
 
@@ -976,8 +1064,8 @@ FEMResult solveAndEstimate(
         p_fun,
         q_fun,
         f_fun,
-        leftDirichletValue,
-        rightNeumannFlux
+        left,
+        right
     );
 
     result.dofCoords = buildDofCoords(meshNodes, p_deg);
@@ -1001,7 +1089,8 @@ FEMResult solveAndEstimate(
             p_fun,
             q_fun,
             f_fun,
-            rightNeumannFlux
+            left,
+            right
         );
 
         Eigen::MatrixXd Aerr = errorMatrix_AK(
@@ -1185,7 +1274,7 @@ int main() {
         //     p_deg = 2 -> funkcje kwadratowe
         // --------------------------------------------------
 
-        const int p_deg = 2; // zmień na 2, żeby użyć funkcji kwadratowych
+        const int p_deg = 2;
         const int p_err = p_deg + 1;
 
         validateDegree(p_deg);
@@ -1201,20 +1290,11 @@ int main() {
         // --------------------------------------------------
         // Przykład:
         //
-        //     u'' + 6x^2 = 0
+        //     -u'' + u = f
         //
-        // czyli:
+        // z rozwiązaniem dokładnym:
         //
-        //     -u'' = 6x^2
-        //
-        // Warunki:
-        //
-        //     u(0) = 1
-        //     u'(1) = -1/2
-        //
-        // Rozwiązanie analityczne:
-        //
-        //     u(x) = -0.5 x^4 + 1.5 x + 1
+        //     u(x) = tanh(k * (x - x0))
         // --------------------------------------------------
 
         Function a_fun = [](double /*x*/) {
@@ -1224,33 +1304,70 @@ int main() {
         const double k  = 10.0;
         const double x0 = 0.5;
 
-        // q > 0 sprawia ze macierz A_K lokalnego problemu bledu
-        // jest dodatnio okreslona (bez osobliwosci).
-        auto q_fun = [](double x) {
+        // q > 0 sprawia, że macierz A_K lokalnego problemu błędu
+        // jest dodatnio określona.
+        Function q_fun = [](double /*x*/) {
             return 1.0;
         };
 
-        auto p_fun = [](double x) {
-        return 0.0;
+        Function p_fun = [](double /*x*/) {
+            return 0.0;
         };
-        
-        // Rownanie: -u'' + u = f
-        // u(x)   = tanh(k*(x-x0))
-        // u''(x) = -2k^2 * tanh(k*(x-x0)) * sech^2(k*(x-x0))
-        // f(x)   = -u'' + u = tanh(k*(x-x0)) * (1 + 2k^2 * sech^2(k*(x-x0)))
-        auto f_fun = [k, x0](double x) {
-            double t     = std::tanh(k * (x - x0));
-            double sech2 = 1.0 / (std::cosh(k * (x - x0)) * std::cosh(k * (x - x0)));
+
+        Function f_fun = [k, x0](double x) {
+            double z = k * (x - x0);
+            double t = std::tanh(z);
+            double c = std::cosh(z);
+            double sech2 = 1.0 / (c * c);
+
             return t * (1.0 + 2.0 * k * k * sech2);
         };
 
-        Function u_exact = [&](double x) {
-            return std::tanh(k*(x-x0));
+        Function u_exact = [k, x0](double x) {
+            return std::tanh(k * (x - x0));
         };
 
-        const double leftDirichletValue = u_exact(0.0);
-        const double rightNeumannFlux =
-            k / (std::cosh(k * (1.0 - x0)) * std::cosh(k * (1.0 - x0)));
+        Function du_exact = [k, x0](double x) {
+            double z = k * (x - x0);
+            double c = std::cosh(z);
+            double sech2 = 1.0 / (c * c);
+
+            return k * sech2;
+        };
+
+        // --------------------------------------------------
+        // Elastyczne warunki brzegowe.
+        //
+        // Dla DIRICHLET:
+        //     value = u(x_boundary)
+        //
+        // Dla NEUMANN:
+        //     value = a(x_boundary) * u'(x_boundary)
+        //
+        // Dla tego przykładu a(x)=1, więc NEUMANN value = u'(x).
+        // --------------------------------------------------
+
+        BoundaryCondition left = {
+            DIRICHLET,
+            u_exact(0.0)
+        };
+
+        BoundaryCondition right = {
+            DIRICHLET,
+            u_exact(1.0)
+        };
+
+        // Alternatywny wariant: lewy Dirichlet, prawy Neumann.
+        //
+        // BoundaryCondition left = {
+        //     DIRICHLET,
+        //     u_exact(0.0)
+        // };
+        //
+        // BoundaryCondition right = {
+        //     NEUMANN,
+        //     a_fun(1.0) * du_exact(1.0)
+        // };
 
         std::vector<double> meshNodes = {
             0.0,
@@ -1263,6 +1380,7 @@ int main() {
         const double alpha = 0.3;
 
         FEMVisualizer viz;
+
         for (int step = 0; step < maxSteps; ++step) {
             FEMResult result = solveAndEstimate(
                 meshNodes,
@@ -1271,8 +1389,8 @@ int main() {
                 p_fun,
                 q_fun,
                 f_fun,
-                leftDirichletValue,
-                rightNeumannFlux
+                left,
+                right
             );
 
             double etaGlobal = std::sqrt(std::max(0.0, result.etaGlobal2));
@@ -1329,6 +1447,8 @@ int main() {
                 );
             }
         }
+
+        viz.waitForClose();
 
         return 0;
     }
