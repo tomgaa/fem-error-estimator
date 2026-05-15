@@ -58,6 +58,8 @@ double N2(double x, double a, double b) {
     return (x - a) / (b - a);
 }
 
+// stopień wyzej
+
 double dN1_dx(double a, double b) {
     return -1.0 / (b - a);
 }
@@ -68,6 +70,8 @@ double dN2_dx(double a, double b) {
 
 // ==========================================================
 // Funkcje bazowe kwadratowe na elemencie referencyjnym s in [0,1]
+// Uzywamy wzbogaconej przestrzeni, dlatego, zeby pokazac krzywizne bledu wewnatrz elementu
+// Liniowe funkcje bazowe nie pozwalały na dobre opisanie krzywizny błędu.
 // Węzły: s = 0, s = 0.5, s = 1
 // ==========================================================
 double N1_B(double s) {

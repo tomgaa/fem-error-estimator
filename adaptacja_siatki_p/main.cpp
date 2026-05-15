@@ -52,7 +52,7 @@ using Function = std::function<double(double)>;
 // ==========================================================
 
 const double DERIV_STEP = 1e-4;
-const double INTEGRATION_STEP = 1e-3;
+const double INTEGRATION_STEP = 0.0005;
 
 // ==========================================================
 // Warunki brzegowe
@@ -1274,7 +1274,7 @@ int main() {
         //     p_deg = 2 -> funkcje kwadratowe
         // --------------------------------------------------
 
-        const int p_deg = 2;
+        const int p_deg = 1;
         const int p_err = p_deg + 1;
 
         validateDegree(p_deg);
@@ -1447,8 +1447,6 @@ int main() {
                 );
             }
         }
-
-        viz.waitForClose();
 
         return 0;
     }

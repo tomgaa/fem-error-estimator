@@ -313,42 +313,75 @@ int main() {
         // B_K (u_h, psi_K) - L_K(psi_K) + t_K(-1/+1)
         double a = nodes[i], b = nodes[i+1];
         double h = b - a;
-        double u_approx = d[i];
+        auto u_approx = [&](double x){
+            return d[i] * N1(x,a,b) + d[i+1] * N2(x,a,b);
+        };
+        auto du_approx = [&](double x){
+            return (d[i+1]-d[i])/h;
+        };
+
+
+        double nElem = nodes.size();
 
         // N - funkcja testowa
         // integral(N' * N*d) + N(l)*d*N(l) - N(0)*d*N(0)
 
-        double dN1 = -1;
-        double dN2 = 1;
+        double dN1 = -1.0 /h;
+        double dN2 = 1.0 / h;
 
         // czesc t_K
-        double du_left = d[i]*dN1 + d[i+1]*dN2;
-        double du_right = 0;
-        if (i == (int)nodes.size() - 2) {
-            double du_right = d[i+1]*dN1 + d[i+1]*dN2;
+        double uPrimeCurrent = (d[i+1] - d[i]) / h;
+
+        double uPrimeLeftNeighbor;
+        if (i == 0) {
+            uPrimeLeftNeighbor = uPrimeCurrent; // na brzegach specjalna obsługa
         } else {
-            double du_right = d[i+1]*dN1 + d[i+2]*dN2;
+            double hL = nodes[i] - nodes[i-1];
+            uPrimeLeftNeighbor = (d[i] - d[i-1]) / hL;
         }
 
-        double t_left = t_K(1, du_left, du_right, -1);
-        double t_right = t_K(1, du_left, du_right, 1);
+        double uPrimeRightNeighbor;
+        if (i == nElem - 1) {
+            uPrimeRightNeighbor = uPrimeCurrent; // na brzegach specjalna obsługa
+        } else {
+            double hR = nodes[i+2] - nodes[i+1];
+            uPrimeRightNeighbor = (d[i+2] - d[i+1]) / hR;
+        }
+
+        double t_left  = 0.5 * (uPrimeCurrent + uPrimeLeftNeighbor)  * (-1.0);
+        double t_right = 0.5 * (uPrimeCurrent + uPrimeRightNeighbor) * ( 1.0);
 
         auto d_u_d_v_1 = [a,b,u_approx, dN1](double x) {
-            return N1(x,a,b)*u_approx*dN1;
+            return N1(x,a,b)*u_approx(x)*dN1;
         };
 
         auto d_u_d_v_2 = [a,b, u_approx,dN2](double x) {
-            return N2(x,a,b)*u_approx*dN2;
+            return N2(x,a,b)*u_approx(x)*dN2;
         };
 
-        double B_u_v_1 = calka(a,b,d_u_d_v_1) + N1(b,a,b)*u_approx*N1(b,a,b) - N1(a,a,b)*u_approx*N1(a,a,b);
-        double B_u_v_2 = calka(a,b,d_u_d_v_2) + N2(b,a,b)*u_approx*N2(b,a,b) - N2(a,a,b)*u_approx*N2(a,a,b);
+        double uhPrime = (d[i+1] - d[i]) / h;
+        double psi1Prime = -1.0 / h;
+        double psi2Prime =  1.0 / h;
 
-        double L_v_1 = calka(a,b,f_fun) + -0.5*N1(b,a,b) - 1*N1(a,a,b);
-        double L_v_2 = calka(a,b,f_fun) + -0.5*N2(b,a,b) - 1*N2(a,a,b);
+        double B1 = calka(a, b, [&](double x) {
+            double uh = d[i] * N1(x,a,b) + d[i+1] * N2(x,a,b);
+            return uhPrime * psi1Prime + q_fun(x) * uh * N1(x,a,b);
+        });
 
-        double theta_1 = B_u_v_1 - L_v_1 + t_left;
-        double theta_2 = B_u_v_2 - L_v_2 + t_right;
+        double B2 = calka(a, b, [&](double x) {
+            double uh = d[i] * N1(x,a,b) + d[i+1] * N2(x,a,b);
+            return uhPrime * psi2Prime + q_fun(x) * uh * N2(x,a,b);
+        });
+
+        double L1 = calka(a, b, [&](double x) {
+            return f_fun(x) * N1(x,a,b);
+        });
+
+        double L2 = calka(a, b, [&](double x) {
+            return f_fun(x) * N2(x,a,b);
+        });
+        double theta_1 = B1 - L1 + t_left;
+        double theta_2 = B2 - L2 + t_right;
 
         std::vector<double> theta {theta_1, theta_2};
 
