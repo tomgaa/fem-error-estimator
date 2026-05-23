@@ -44,12 +44,13 @@
 #include <stdexcept>
 #include <algorithm>
 #include <iomanip>
+#include <memory>
 
 #include "../Eigen/Dense"
 
 #include "fem_visualizer.h"
-
-using Function = std::function<double(double)>;
+#include "problem_config.h"
+#include "terminal_ui.h"
 
 // ==========================================================
 // Parametry numeryczne
@@ -57,20 +58,6 @@ using Function = std::function<double(double)>;
 
 const double DERIV_STEP = 1e-4;
 const double INTEGRATION_STEP = 0.0005;
-
-// ==========================================================
-// Warunki brzegowe
-// ==========================================================
-
-enum BoundaryType {
-    DIRICHLET,
-    NEUMANN
-};
-
-struct BoundaryCondition {
-    BoundaryType type;
-    double value;
-};
 
 // ==========================================================
 // Pochodna numeryczna i całkowanie prostokątami
@@ -1451,143 +1438,96 @@ void printEta(
 }
 
 // ==========================================================
-// main
+// Uruchomienie solvera z konfiguracji terminalowej
 // ==========================================================
 
-int main() {
-    try {
-        // --------------------------------------------------
-        // Wybór stopnia funkcji kształtu:
-        //
-        //     p_deg = 1 -> funkcje liniowe
-        //     p_deg = 2 -> funkcje kwadratowe
-        // --------------------------------------------------
+std::vector<double> buildUniformMesh(
+    double left,
+    double right,
+    int initialElements
+) {
+    if (right <= left) {
+        throw std::runtime_error("Prawy koniec przedzialu musi byc wiekszy od lewego.");
+    }
 
-        const int p_deg = 2;
-        const int p_err = p_deg + 1;
+    if (initialElements < 1) {
+        throw std::runtime_error("Liczba elementow poczatkowych musi byc dodatnia.");
+    }
 
-        validateDegree(p_deg);
-        validateDegree(p_err);
+    std::vector<double> meshNodes;
+    meshNodes.reserve(initialElements + 1);
 
-        std::cout << "============================================\n";
-        std::cout << "FEM 1D z p_deg = " << p_deg
-                  << ", estymator p_err = " << p_err << "\n";
-        std::cout << "Pochodne liczone numerycznie.\n";
-        std::cout << "Calkowanie metoda prostokatow.\n";
-        std::cout << "Estymator uzywa hierarchicznych funkcji ksztaltu.\n";
-        std::cout << "============================================\n";
+    for (int i = 0; i <= initialElements; ++i) {
+        double t = static_cast<double>(i) / static_cast<double>(initialElements);
+        meshNodes.push_back(left + (right - left) * t);
+    }
 
-        // --------------------------------------------------
-        // Przykład:
-        //
-        //     -u'' + u = f
-        //
-        // z rozwiązaniem dokładnym:
-        //
-        //     u(x) = tanh(k * (x - x0))
-        // --------------------------------------------------
+    return meshNodes;
+}
 
-        Function a_fun = [](double /*x*/) {
-            return 1.0;
-        };
+void printExactComparison(
+    const FEMResult& result,
+    const Function& u_exact
+) {
+    std::cout << "Porownanie z rozwiazaniem analitycznym w DOF-ach:\n";
 
-        const double k  = 10.0;
-        const double x0 = 0.5;
+    for (int i = 0; i < result.d.size(); ++i) {
+        double x = result.dofCoords[i];
+        double exact = u_exact(x);
+        double err = result.d(i) - exact;
 
-        // q > 0 sprawia, że macierz A_K lokalnego problemu błędu
-        // jest dodatnio określona.
-        Function q_fun = [](double /*x*/) {
-            return 1.0;
-        };
+        std::cout << "  x = " << std::setw(12) << std::setprecision(8) << x
+                  << "  uh = " << std::setw(14) << std::setprecision(10) << result.d(i)
+                  << "  u_exact = " << std::setw(14) << std::setprecision(10) << exact
+                  << "  err = " << std::setw(14) << std::setprecision(10) << err
+                  << "\n";
+    }
+}
 
-        Function p_fun = [](double /*x*/) {
-            return 0.0;
-        };
+void runAdaptiveSolver(const ProblemConfig& config) {
+    int p_err = config.p_deg + 1;
 
-        Function f_fun = [k, x0](double x) {
-            double z = k * (x - x0);
-            double t = std::tanh(z);
-            double c = std::cosh(z);
-            double sech2 = 1.0 / (c * c);
+    validateDegree(config.p_deg);
+    validateDegree(p_err);
 
-            return t * (1.0 + 2.0 * k * k * sech2);
-        };
+    std::vector<double> meshNodes = buildUniformMesh(
+        config.domainLeft,
+        config.domainRight,
+        config.initialElements
+    );
 
-        Function u_exact = [k, x0](double x) {
-            return std::tanh(k * (x - x0));
-        };
+    std::cout << "============================================\n";
+    std::cout << "FEM 1D z p_deg = " << config.p_deg
+              << ", estymator p_err = " << p_err << "\n";
+    std::cout << "Pochodne liczone numerycznie.\n";
+    std::cout << "Calkowanie metoda prostokatow.\n";
+    std::cout << "Estymator uzywa hierarchicznych funkcji ksztaltu.\n";
+    std::cout << "============================================\n";
 
-        Function du_exact = [k, x0](double x) {
-            double z = k * (x - x0);
-            double c = std::cosh(z);
-            double sech2 = 1.0 / (c * c);
+    std::unique_ptr<FEMVisualizer> viz;
 
-            return k * sech2;
-        };
+    if (config.visualizationEnabled) {
+        viz = std::make_unique<FEMVisualizer>();
+    }
 
-        // --------------------------------------------------
-        // Elastyczne warunki brzegowe.
-        //
-        // Dla DIRICHLET:
-        //     value = u(x_boundary)
-        //
-        // Dla NEUMANN:
-        //     value = a(x_boundary) * u'(x_boundary)
-        //
-        // Dla tego przykładu a(x)=1, więc NEUMANN value = u'(x).
-        // --------------------------------------------------
+    for (int step = 0; step < config.maxSteps; ++step) {
+        FEMResult result = solveAndEstimate(
+            meshNodes,
+            config.p_deg,
+            config.a_fun,
+            config.p_fun,
+            config.q_fun,
+            config.f_fun,
+            config.left,
+            config.right
+        );
 
-        BoundaryCondition left = {
-            DIRICHLET,
-            u_exact(0.0)
-        };
+        double etaGlobal = std::sqrt(std::max(0.0, result.etaGlobal2));
+        double uhEnergyNorm = std::sqrt(std::max(0.0, result.uhEnergyNorm2));
+        double toleranceLevel = config.TOL * uhEnergyNorm;
 
-        BoundaryCondition right = {
-            DIRICHLET,
-            u_exact(1.0)
-        };
-
-        // Alternatywny wariant: lewy Dirichlet, prawy Neumann.
-        //
-        // BoundaryCondition left = {
-        //     DIRICHLET,
-        //     u_exact(0.0)
-        // };
-        //
-        // BoundaryCondition right = {
-        //     NEUMANN,
-        //     a_fun(1.0) * du_exact(1.0)
-        // };
-
-        std::vector<double> meshNodes = {
-            0.0,
-            0.5,
-            1.0
-        };
-
-        const int maxSteps = 20;
-        const double TOL = 0.01;
-        const double alpha = 0.3;
-
-        FEMVisualizer viz;
-
-        for (int step = 0; step < maxSteps; ++step) {
-            FEMResult result = solveAndEstimate(
-                meshNodes,
-                p_deg,
-                a_fun,
-                p_fun,
-                q_fun,
-                f_fun,
-                left,
-                right
-            );
-
-            double etaGlobal = std::sqrt(std::max(0.0, result.etaGlobal2));
-            double uhEnergyNorm = std::sqrt(std::max(0.0, result.uhEnergyNorm2));
-            double toleranceLevel = TOL * uhEnergyNorm;
-
-            viz.plotStep(
+        if (viz) {
+            viz->plotStep(
                 step,
                 meshNodes,
                 result.dofCoords,
@@ -1595,48 +1535,50 @@ int main() {
                 result.eta2List,
                 etaGlobal,
                 uhEnergyNorm,
-                TOL,
-                alpha,
-                p_deg
+                config.TOL,
+                config.alpha,
+                config.p_deg
             );
-
-            std::cout << "\n--------------------------------------------\n";
-            std::cout << "Krok adaptacji: " << step << "\n";
-            std::cout << "Liczba elementow: " << meshNodes.size() - 1 << "\n";
-            std::cout << "Liczba DOF: " << result.d.size() << "\n";
-            std::cout << "etaGlobal = " << std::setprecision(12) << etaGlobal << "\n";
-            std::cout << "||u_h||_E = " << std::setprecision(12) << uhEnergyNorm << "\n";
-            std::cout << "TOL * ||u_h||_E = " << std::setprecision(12) << toleranceLevel << "\n";
-
-            printDofs(result.dofCoords, result.d);
-            printEta(meshNodes, result.eta2List, result.equilibriumList);
-
-            std::cout << "Porownanie z rozwiazaniem analitycznym w DOF-ach:\n";
-
-            for (int i = 0; i < result.d.size(); ++i) {
-                double x = result.dofCoords[i];
-                double err = result.d(i) - u_exact(x);
-
-                std::cout << "  x = " << std::setw(12) << std::setprecision(8) << x
-                          << "  uh = " << std::setw(14) << std::setprecision(10) << result.d(i)
-                          << "  u_exact = " << std::setw(14) << std::setprecision(10) << u_exact(x)
-                          << "  err = " << std::setw(14) << std::setprecision(10) << err
-                          << "\n";
-            }
-
-            if (etaGlobal <= toleranceLevel) {
-                std::cout << "\nWarunek stopu spelniony.\n";
-                break;
-            }
-
-            if (step + 1 < maxSteps) {
-                meshNodes = refineMesh(
-                    meshNodes,
-                    result.eta2List,
-                    alpha
-                );
-            }
         }
+
+        std::cout << "\n--------------------------------------------\n";
+        std::cout << "Krok adaptacji: " << step << "\n";
+        std::cout << "Liczba elementow: " << meshNodes.size() - 1 << "\n";
+        std::cout << "Liczba DOF: " << result.d.size() << "\n";
+        std::cout << "etaGlobal = " << std::setprecision(12) << etaGlobal << "\n";
+        std::cout << "||u_h||_E = " << std::setprecision(12) << uhEnergyNorm << "\n";
+        std::cout << "TOL * ||u_h||_E = " << std::setprecision(12) << toleranceLevel << "\n";
+
+        printDofs(result.dofCoords, result.d);
+        printEta(meshNodes, result.eta2List, result.equilibriumList);
+
+        if (config.hasExactSolution) {
+            printExactComparison(result, config.u_exact);
+        }
+
+        if (etaGlobal <= toleranceLevel) {
+            std::cout << "\nWarunek stopu spelniony.\n";
+            break;
+        }
+
+        if (step + 1 < config.maxSteps) {
+            meshNodes = refineMesh(
+                meshNodes,
+                result.eta2List,
+                config.alpha
+            );
+        }
+    }
+}
+
+// ==========================================================
+// main
+// ==========================================================
+
+int main() {
+    try {
+        ProblemConfig config = askProblemConfigFromTerminal();
+        runAdaptiveSolver(config);
 
         return 0;
     }
