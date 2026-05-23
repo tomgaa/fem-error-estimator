@@ -1,3 +1,4 @@
 *.o
 fem_solver
 fem_tests
+fem_equation_tests
