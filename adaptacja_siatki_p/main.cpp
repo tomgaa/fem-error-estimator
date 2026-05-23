@@ -1575,6 +1575,7 @@ void runAdaptiveSolver(const ProblemConfig& config) {
 // main
 // ==========================================================
 
+#ifndef FEM_NO_MAIN
 int main() {
     try {
         ProblemConfig config = askProblemConfigFromTerminal();
@@ -1587,3 +1588,4 @@ int main() {
         return 1;
     }
 }
+#endif
