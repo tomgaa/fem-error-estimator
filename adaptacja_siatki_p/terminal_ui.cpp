@@ -400,6 +400,9 @@ void printSummary(const ProblemConfig& config) {
     std::cout << "Visualization: "
               << (config.visualizationEnabled ? "enabled" : "disabled")
               << "\n";
+    std::cout << "Step mode: "
+              << (config.pauseAfterEachStep ? "manual, press ENTER between steps" : "automatic")
+              << "\n";
     std::cout << "============================================\n";
 }
 
@@ -421,6 +424,7 @@ ProblemConfig tanhDefaults() {
     config.rightBoundaryExpression = "tanh(10*(x-0.5))";
     config.hasExactSolution = true;
     config.exactExpression = "tanh(10*(x-0.5))";
+    config.pauseAfterEachStep = false;
 
     return config;
 }
@@ -441,6 +445,7 @@ ProblemConfig simpleDefaults() {
     config.leftBoundaryExpression = "0";
     config.rightBoundaryExpression = "0";
     config.hasExactSolution = false;
+    config.pauseAfterEachStep = false;
 
     return config;
 }
@@ -552,6 +557,10 @@ ProblemConfig askProblemConfigFromTerminal() {
     config.visualizationEnabled = askYesNo(
         "Enable gnuplot visualization?",
         defaults.visualizationEnabled
+    );
+    config.pauseAfterEachStep = askYesNo(
+        "Pause after each adaptation step?",
+        defaults.pauseAfterEachStep
     );
 
     std::cout << "\nChecking coefficient samples on the domain...\n";

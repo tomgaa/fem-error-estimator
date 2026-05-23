@@ -48,5 +48,5 @@ struct ProblemConfig {
     Function u_exact;
 
     bool visualizationEnabled = true;
+    bool pauseAfterEachStep = false;
 };
-

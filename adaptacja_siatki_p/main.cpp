@@ -1484,6 +1484,14 @@ void printExactComparison(
     }
 }
 
+void waitForEnterBeforeNextStep() {
+    std::cout << "\nNacisnij ENTER, aby przejsc do kolejnego kroku adaptacji...";
+    std::cout.flush();
+
+    std::string line;
+    std::getline(std::cin, line);
+}
+
 void runAdaptiveSolver(const ProblemConfig& config) {
     int p_err = config.p_deg + 1;
 
@@ -1559,6 +1567,10 @@ void runAdaptiveSolver(const ProblemConfig& config) {
         if (etaGlobal <= toleranceLevel) {
             std::cout << "\nWarunek stopu spelniony.\n";
             break;
+        }
+
+        if (config.pauseAfterEachStep && step + 1 < config.maxSteps) {
+            waitForEnterBeforeNextStep();
         }
 
         if (step + 1 < config.maxSteps) {
