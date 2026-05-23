@@ -16,8 +16,12 @@
 //     p_deg = 1 -> estymator p_err = 2
 //     p_deg = 2 -> estymator p_err = 3
 //
-// Ta wersja NIE używa kwadratury Gaussa.
-// Pochodne są liczone numerycznie, tak jak w pierwotnym main.cpp.
+// Solver główny używa funkcji Lagrange'a.
+// Lokalny estymator błędu używa hierarchicznych funkcji kształtu:
+//     psi_1(s) = 1 - s,
+//     psi_2(s) = s,
+//     psi_i(0) = psi_i(1) = 0 dla i >= 3.
+//
 //
 // Warunki brzegowe są elastyczne:
 //
@@ -181,6 +185,69 @@ double shapeDerivNumerical(int i, int degree, double s) {
 }
 
 // ==========================================================
+// Hierarchiczne funkcje kształtu dla lokalnego estymatora błędu
+//
+// Ważne:
+//   - solver główny nadal używa funkcji Lagrange'a,
+//   - estymator błędu używa poniższej bazy hierarchicznej.
+//
+// Dwie pierwsze funkcje są liniowe i spełniają:
+//
+//     psi_0(s) + psi_1(s) = 1.
+//
+// Kolejne funkcje są funkcjami wewnętrznymi, czyli znikają na
+// końcach elementu. Dzięki temu warunek równowagi elementu
+// z note_mgr może być sprawdzany przez r(psi_0) + r(psi_1) = 0.
+// ==========================================================
+
+double hierShapeValue(int i, int degree, double s) {
+    validateDegree(degree);
+
+    if (i < 0 || i > degree) {
+        throw std::runtime_error("hierShapeValue: zły lokalny indeks funkcji kształtu.");
+    }
+
+    if (i == 0) {
+        return 1.0 - s;
+    }
+
+    if (i == 1) {
+        return s;
+    }
+
+    if (i == 2) {
+        return s * (1.0 - s);
+    }
+
+    if (i == 3) {
+        return s * (1.0 - s) * (2.0 * s - 1.0);
+    }
+
+    throw std::runtime_error("hierShapeValue: nieobsługiwany indeks funkcji.");
+}
+
+// Pochodna hierarchicznej funkcji kształtu liczona numerycznie
+// po zmiennej referencyjnej s. Pochodną po x otrzymujemy jako:
+//
+//     dpsi/dx = (dpsi/ds) / h.
+//
+double hierShapeDerivNumerical(int i, int degree, double s) {
+    double h = DERIV_STEP;
+
+    if (s - h < 0.0) {
+        return (hierShapeValue(i, degree, s + h)
+              - hierShapeValue(i, degree, s)) / h;
+    }
+
+    if (s + h > 1.0) {
+        return (hierShapeValue(i, degree, s)
+              - hierShapeValue(i, degree, s - h)) / h;
+    }
+
+    return (hierShapeValue(i, degree, s + h)
+          - hierShapeValue(i, degree, s - h)) / (2.0 * h);
+}
+
 // Globalne współrzędne stopni swobody
 // ==========================================================
 
@@ -582,6 +649,96 @@ double localLv(
 }
 
 // ==========================================================
+// Lokalne formy z hierarchiczną funkcją testową.
+//
+// Te funkcje są używane wyłącznie w estymatorze błędu.
+// u_h nadal jest rozwiązaniem z solvera głównego, więc jest
+// rozwinięte w bazie Lagrange'a stopnia p_deg.
+// ==========================================================
+
+double localBuhvHierTest(
+    const std::vector<double>& meshNodes,
+    const Eigen::VectorXd& d,
+    int elem,
+    int p_deg,
+    int testDegree,
+    int testLocal,
+    const Function& a_fun,
+    const Function& p_fun,
+    const Function& q_fun
+) {
+    validateDegree(p_deg);
+    validateDegree(testDegree);
+
+    double a = meshNodes[elem];
+    double b = meshNodes[elem + 1];
+    double h = b - a;
+
+    Function integrand = [&](double s) {
+        double x = a + h * s;
+
+        double uh = uhValueOnElement(
+            elem,
+            s,
+            p_deg,
+            d
+        );
+
+        double duh = duhDxOnElement(
+            elem,
+            s,
+            h,
+            p_deg,
+            d
+        );
+
+        double v = hierShapeValue(
+            testLocal,
+            testDegree,
+            s
+        );
+
+        double dv_dx =
+            hierShapeDerivNumerical(testLocal, testDegree, s) / h;
+
+        return
+            a_fun(x) * duh * dv_dx
+            + p_fun(x) * duh * v
+            + q_fun(x) * uh * v;
+    };
+
+    return h * calka(0.0, 1.0, integrand);
+}
+
+double localLvHierTest(
+    const std::vector<double>& meshNodes,
+    int elem,
+    int testDegree,
+    int testLocal,
+    const Function& f_fun
+) {
+    validateDegree(testDegree);
+
+    double a = meshNodes[elem];
+    double b = meshNodes[elem + 1];
+    double h = b - a;
+
+    Function integrand = [&](double s) {
+        double x = a + h * s;
+
+        double v = hierShapeValue(
+            testLocal,
+            testDegree,
+            s
+        );
+
+        return f_fun(x) * v;
+    };
+
+    return h * calka(0.0, 1.0, integrand);
+}
+
+// ==========================================================
 // Dane brzegowe elementu do estymatora
 // ==========================================================
 
@@ -705,6 +862,7 @@ ElementBoundaryData computeElementBoundaryData(
     const Eigen::VectorXd& d,
     int elem,
     int p_deg,
+    int p_err,
     const Function& a_fun,
     const Function& p_fun,
     const Function& q_fun,
@@ -712,6 +870,8 @@ ElementBoundaryData computeElementBoundaryData(
     const BoundaryCondition& left,
     const BoundaryCondition& right
 ) {
+    validateDegree(p_err);
+
     ElementBoundaryData data;
 
     data.tLeft = averagedFluxOnElementBoundary(
@@ -736,51 +896,61 @@ ElementBoundaryData computeElementBoundaryData(
         right
     );
 
+    // Warunek prolongacji/równowagi estymatora liczony jest dla
+    // dwóch pierwszych funkcji hierarchicznych:
+    //   psi_0 = 1 - s,
+    //   psi_1 = s.
+    // Nie używamy tutaj funkcji Lagrange'a stopnia p_deg.
     int leftLocal = 0;
-    int rightLocal = p_deg;
+    int rightLocal = 1;
 
-    double B_left = localBuhv(
+    double B_left = localBuhvHierTest(
         meshNodes,
         d,
         elem,
         p_deg,
-        p_deg,
+        p_err,
         leftLocal,
         a_fun,
         p_fun,
         q_fun
     );
 
-    double L_left = localLv(
+    double L_left = localLvHierTest(
         meshNodes,
         elem,
-        p_deg,
+        p_err,
         leftLocal,
         f_fun
     );
 
-    double B_right = localBuhv(
+    double B_right = localBuhvHierTest(
         meshNodes,
         d,
         elem,
         p_deg,
-        p_deg,
+        p_err,
         rightLocal,
         a_fun,
         p_fun,
         q_fun
     );
 
-    double L_right = localLv(
+    double L_right = localLvHierTest(
         meshNodes,
         elem,
-        p_deg,
+        p_err,
         rightLocal,
         f_fun
     );
 
-    data.thetaLeft = B_left - L_left + data.tLeft;
-    data.thetaRight = B_right - L_right + data.tRight;
+    // Poprawiona konwencja znaków zgodna z:
+    //   lambda_K(v) = theta_left v(left) + theta_right v(right)
+    //               + t_left v(left) + t_right v(right),
+    //   r_K(v) = B_K(u_h,v) - L_K(v) - lambda_K(v).
+    // Z warunku r_K(psi_i)=0 dostajemy theta_i = B_i - L_i - t_i.
+    data.thetaLeft = B_left - L_left - data.tLeft;
+    data.thetaRight = B_right - L_right - data.tRight;
 
     return data;
 }
@@ -812,14 +982,14 @@ Eigen::MatrixXd errorMatrix_AK(
             Function integrand = [&](double s) {
                 double x = a + h * s;
 
-                double v_i = shapeValue(i, p_err, s);
-                double phi_j = shapeValue(j, p_err, s);
+                double v_i = hierShapeValue(i, p_err, s);
+                double phi_j = hierShapeValue(j, p_err, s);
 
                 double dv_i_dx =
-                    shapeDerivNumerical(i, p_err, s) / h;
+                    hierShapeDerivNumerical(i, p_err, s) / h;
 
                 double dphi_j_dx =
-                    shapeDerivNumerical(j, p_err, s) / h;
+                    hierShapeDerivNumerical(j, p_err, s) / h;
 
                 return
                     a_fun(x) * dphi_j_dx * dv_i_dx
@@ -857,7 +1027,7 @@ Eigen::VectorXd computeLocalResidual(
     Eigen::VectorXd r = Eigen::VectorXd::Zero(nErr);
 
     for (int m = 0; m < nErr; ++m) {
-        double B = localBuhv(
+        double B = localBuhvHierTest(
             meshNodes,
             d,
             elem,
@@ -869,7 +1039,7 @@ Eigen::VectorXd computeLocalResidual(
             q_fun
         );
 
-        double L = localLv(
+        double L = localLvHierTest(
             meshNodes,
             elem,
             p_err,
@@ -877,15 +1047,15 @@ Eigen::VectorXd computeLocalResidual(
             f_fun
         );
 
-        double vLeft = shapeValue(m, p_err, 0.0);
-        double vRight = shapeValue(m, p_err, 1.0);
+        double vLeft = hierShapeValue(m, p_err, 0.0);
+        double vRight = hierShapeValue(m, p_err, 1.0);
 
         r(m) =
             B - L
             - bd.thetaLeft * vLeft
             - bd.thetaRight * vRight
-            + bd.tLeft * vLeft
-            + bd.tRight * vRight;
+            - bd.tLeft * vLeft
+            - bd.tRight * vRight;
     }
 
     return r;
@@ -910,7 +1080,7 @@ Eigen::VectorXd meanConstraintVector(
 
     for (int i = 0; i < n; ++i) {
         Function integrand = [&](double s) {
-            return shapeValue(i, degree, s);
+            return hierShapeValue(i, degree, s);
         };
 
         c(i) = h * calka(0.0, 1.0, integrand);
@@ -1033,6 +1203,7 @@ struct FEMResult {
     std::vector<Eigen::VectorXd> residualList;
     std::vector<Eigen::VectorXd> phiList;
     std::vector<double> eta2List;
+    std::vector<double> equilibriumList;
 
     double etaGlobal2 = 0.0;
     double uhEnergyNorm2 = 0.0;
@@ -1073,6 +1244,7 @@ FEMResult solveAndEstimate(
     result.residualList.resize(nElem);
     result.phiList.resize(nElem);
     result.eta2List.assign(nElem, 0.0);
+    result.equilibriumList.assign(nElem, 0.0);
 
     double etaGlobal2 = 0.0;
 
@@ -1085,6 +1257,7 @@ FEMResult solveAndEstimate(
             result.d,
             e,
             p_deg,
+            p_err,
             a_fun,
             p_fun,
             q_fun,
@@ -1127,6 +1300,13 @@ FEMResult solveAndEstimate(
         result.residualList[e] = r;
         result.phiList[e] = phi;
         result.eta2List[e] = eta2;
+
+        // Dla hierarchicznej bazy estymatora pierwsze dwie funkcje
+        // spełniają psi_0 + psi_1 = 1. Dlatego r(psi_0)+r(psi_1)
+        // jest diagnostyką lokalnej równowagi r_K(1)=0.
+        if (r.size() >= 2) {
+            result.equilibriumList[e] = r(0) + r(1);
+        }
 
         etaGlobal2 += eta2;
     }
@@ -1240,7 +1420,8 @@ void printDofs(
 
 void printEta(
     const std::vector<double>& meshNodes,
-    const std::vector<double>& eta2List
+    const std::vector<double>& eta2List,
+    const std::vector<double>& equilibriumList = {}
 ) {
     std::cout << "Estymatory elementowe eta_K:\n";
 
@@ -1256,8 +1437,16 @@ void printEta(
         std::cout << "  elem " << std::setw(3) << e
                   << "  [" << std::setprecision(8) << meshNodes[e]
                   << ", " << std::setprecision(8) << meshNodes[e + 1] << "]"
-                  << "  eta = " << std::setprecision(12) << eta
-                  << "\n";
+                  << "  eta = " << std::setprecision(12) << eta;
+
+        if (static_cast<int>(equilibriumList.size()) == nElem) {
+            std::cout << "  r(psi0)+r(psi1) = "
+                      << std::setprecision(4) << std::scientific
+                      << equilibriumList[e]
+                      << std::defaultfloat;
+        }
+
+        std::cout << "\n";
     }
 }
 
@@ -1274,7 +1463,7 @@ int main() {
         //     p_deg = 2 -> funkcje kwadratowe
         // --------------------------------------------------
 
-        const int p_deg = 1;
+        const int p_deg = 2;
         const int p_err = p_deg + 1;
 
         validateDegree(p_deg);
@@ -1285,6 +1474,7 @@ int main() {
                   << ", estymator p_err = " << p_err << "\n";
         std::cout << "Pochodne liczone numerycznie.\n";
         std::cout << "Calkowanie metoda prostokatow.\n";
+        std::cout << "Estymator uzywa hierarchicznych funkcji ksztaltu.\n";
         std::cout << "============================================\n";
 
         // --------------------------------------------------
@@ -1419,7 +1609,7 @@ int main() {
             std::cout << "TOL * ||u_h||_E = " << std::setprecision(12) << toleranceLevel << "\n";
 
             printDofs(result.dofCoords, result.d);
-            printEta(meshNodes, result.eta2List);
+            printEta(meshNodes, result.eta2List, result.equilibriumList);
 
             std::cout << "Porownanie z rozwiazaniem analitycznym w DOF-ach:\n";
 
