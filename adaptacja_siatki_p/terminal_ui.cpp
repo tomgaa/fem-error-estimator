@@ -326,11 +326,35 @@ const char* boundaryTypeName(BoundaryType type) {
     return type == DIRICHLET ? "Dirichlet" : "Neumann";
 }
 
+std::string boundaryEquation(
+    const std::string& side,
+    BoundaryType type,
+    double x,
+    double value
+) {
+    std::ostringstream out;
+    out << side << ": ";
+
+    if (type == DIRICHLET) {
+        out << "u(" << x << ") = " << value;
+    }
+    else {
+        out << "a(" << x << ")u'(" << x << ") = " << value;
+    }
+
+    return out.str();
+}
+
 void printSummary(const ProblemConfig& config) {
     std::cout << "\n============================================\n";
     std::cout << "Problem summary\n";
-    std::cout << "Equation:\n";
+    std::cout << "Equation form:\n";
     std::cout << "  -(a(x) u'(x))' + p(x) u'(x) + q(x) u(x) = f(x)\n";
+    std::cout << "Configured equation:\n";
+    std::cout << "  -((" << config.aExpression << ") u'(x))'"
+              << " + (" << config.pExpression << ") u'(x)"
+              << " + (" << config.qExpression << ") u(x)"
+              << " = " << config.fExpression << "\n";
     std::cout << "a(x): " << config.aExpression << "\n";
     std::cout << "p(x): " << config.pExpression << "\n";
     std::cout << "q(x): " << config.qExpression << "\n";
@@ -348,6 +372,23 @@ void printSummary(const ProblemConfig& config) {
     std::cout << "Right BC: " << boundaryTypeName(config.right.type)
               << ", value = " << config.right.value
               << " from " << config.rightBoundaryExpression << "\n";
+    std::cout << "Boundary equations:\n";
+    std::cout << "  "
+              << boundaryEquation(
+                     "Left",
+                     config.left.type,
+                     config.domainLeft,
+                     config.left.value
+                 )
+              << "\n";
+    std::cout << "  "
+              << boundaryEquation(
+                     "Right",
+                     config.right.type,
+                     config.domainRight,
+                     config.right.value
+                 )
+              << "\n";
 
     if (config.hasExactSolution) {
         std::cout << "Exact solution: " << config.exactExpression << "\n";
@@ -528,4 +569,3 @@ ProblemConfig askProblemConfigFromTerminal() {
 
     return config;
 }
-
