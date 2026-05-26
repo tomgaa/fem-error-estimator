@@ -46,7 +46,7 @@
 #include <iomanip>
 #include <memory>
 
-#include "../Eigen/Dense"
+#include "./third_party/Eigen/Dense"
 
 #include "fem_visualizer.h"
 #include "problem_config.h"
@@ -1545,7 +1545,8 @@ void runAdaptiveSolver(const ProblemConfig& config) {
                 uhEnergyNorm,
                 config.TOL,
                 config.alpha,
-                config.p_deg
+                config.p_deg,
+                config.hasExactSolution ? &config.u_exact : nullptr
             );
         }
 

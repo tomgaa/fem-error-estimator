@@ -36,18 +36,20 @@
 //       uhEnergyNorm,
 //       TOL,
 //       alpha,
-//       p_deg
+//       p_deg,
+//       &u_exact
 //   );
 //
 // ==========================================================
 
 #include <cstdio>
 #include <cmath>
+#include <functional>
 #include <vector>
 #include <limits>
 #include <stdexcept>
 #include <algorithm>
-#include "../Eigen/Dense"
+#include "./third_party/Eigen/Dense"
 
 struct FEMVisualizer {
 
@@ -205,7 +207,8 @@ struct FEMVisualizer {
         double uhEnergyNorm,
         double TOL,
         double alpha,
-        int p_deg
+        int p_deg,
+        const std::function<double(double)>* uExact = nullptr
     ) {
         validateInput(meshNodes, dofCoords, d, eta2List);
 
@@ -258,6 +261,54 @@ struct FEMVisualizer {
         }
 
         fprintf(gp, "EOD\n");
+
+        // ==================================================
+        // $dExactSolution : x  u_exact(x)
+        //
+        // Gesciej probkowana krzywa analityczna, opcjonalna.
+        // Pomijamy wartosci NaN/Inf, aby gnuplot nie przerywal
+        // rysowania, gdy wyrazenie jest osobliwe na czesci domeny.
+        // ==================================================
+
+        bool hasExactSolutionData = false;
+
+        if (uExact && *uExact) {
+            int exactSampleCount = std::max(200, 8 * nDof);
+            exactSampleCount = std::min(exactSampleCount, 2000);
+
+            double xLeft = meshNodes.front();
+            double xRight = meshNodes.back();
+
+            fprintf(gp, "$dExactSolution << EOD\n");
+
+            for (int i = 0; i < exactSampleCount; ++i) {
+                double t = 0.0;
+
+                if (exactSampleCount > 1) {
+                    t = static_cast<double>(i) / static_cast<double>(exactSampleCount - 1);
+                }
+
+                double x = xLeft + (xRight - xLeft) * t;
+                double exact = (*uExact)(x);
+
+                if (std::isfinite(exact)) {
+                    fprintf(
+                        gp,
+                        "%.12f %.12f\n",
+                        x,
+                        exact
+                    );
+
+                    hasExactSolutionData = true;
+                }
+            }
+
+            if (!hasExactSolutionData) {
+                fprintf(gp, "NaN NaN\n");
+            }
+
+            fprintf(gp, "EOD\n");
+        }
 
         // ==================================================
         // $dDofs : x  1
@@ -460,17 +511,34 @@ struct FEMVisualizer {
         fprintf(gp, "unset logscale\n");
         fprintf(gp, "unset xrange\n");
         fprintf(gp, "unset yrange\n");
-        fprintf(gp, "set title 'Rozwiazanie u_h(x) - punkty DOF'\n");
+        if (hasExactSolutionData) {
+            fprintf(gp, "set title 'Rozwiazanie: u_h(x) i u_{exact}(x)'\n");
+        }
+        else {
+            fprintf(gp, "set title 'Rozwiazanie u_h(x) - punkty DOF'\n");
+        }
         fprintf(gp, "set xlabel 'x'\n");
         fprintf(gp, "set ylabel 'u_h'\n");
         fprintf(gp, "set grid\n");
-        fprintf(gp, "unset key\n");
 
-        fprintf(
-            gp,
-            "plot $dSolution using 1:2 with linespoints "
-            "pt 7 ps 0.8 lw 2 lc rgb '#2563eb' notitle\n"
-        );
+        if (hasExactSolutionData) {
+            fprintf(gp, "set key top right\n");
+            fprintf(
+                gp,
+                "plot $dExactSolution using 1:2 with lines "
+                "lw 2 lc rgb '#f97316' dt 2 title 'u_{exact}', "
+                     "$dSolution using 1:2 with linespoints "
+                "pt 7 ps 0.8 lw 2 lc rgb '#2563eb' title 'u_h'\n"
+            );
+        }
+        else {
+            fprintf(gp, "unset key\n");
+            fprintf(
+                gp,
+                "plot $dSolution using 1:2 with linespoints "
+                "pt 7 ps 0.8 lw 2 lc rgb '#2563eb' notitle\n"
+            );
+        }
 
         // ==================================================
         // PANEL 2 (prawy gorny): Estymatory bledu eta_K
